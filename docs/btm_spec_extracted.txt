@@ -1,0 +1,698 @@
+[Normal] Optimus_Mexico_Behind_TheMeter
+[Normal] Developer-Ready Design Document, Flow and Scraper Specification
+[Normal] Mexico CFE Behind-the-Meter BESS / PV+BESS Autoconsumption Optimizer
+[Normal] Prepared for OptimusAI development branch | Version 1.1 | June 2026 | Investor Layer Added
+[Heading 1] 1. Executive Summary
+[Normal] Optimus_Mexico_Behind_TheMeter is a Mexico-specific optimization module for industrial and commercial customers under CFE basic-supply tariffs. Its purpose is to quantify and optimize behind-the-meter BESS and PV+BESS economics by reconstructing the customer bill, simulating 15-minute dispatch, and calculating savings by tariff component.
+[Normal] The first version must not be a pure merchant arbitrage tool. For Mexican behind-the-meter use cases, the economic engine must prioritize demand and capacity-charge reduction, then time-of-use energy shifting and PV self-consumption. Optional qualified-user or MEM price comparison should be implemented only after the CFE bill engine is validated.
+[Heading 1] 2. Source-of-Truth Inputs
+[Normal] Important regulatory details to encode: CNE 2026 methodology states that the TFSB includes regulated transmission, distribution, SSB operation, CENACE operation, SCnMEM, and generation energy/capacity charges. The 2026 SCnMEM charge is 0.0069 MXN/kWh. The uploaded 2026 methodology also provides factors de carga: GDMTO 0.55, GDMTH 0.57, DIST 0.74 and DIT 0.71. The June 2026 oficio confirms that monthly tariff tables include tariff components and that generation charges are updated through monthly adjustment factors.
+[Heading 1] 3. Scope and Non-Scope
+[Heading 1] 4. Target Users and Operating Modes
+[Heading 1] 5. End-to-End Flow
+[CodeBlock] [Start]
+  |
+  v
+[Create Customer Project]
+  |
+  +--> Upload 15-min load data
+  +--> Upload CFE bills / manual bill totals
+  +--> Select tariff, division, state, municipality
+  +--> Input connected load, contracted demand, substation kVA, largest motor
+  |
+  v
+[Data Validation]
+  |
+  +--> Check timestamp gaps / duplicates / timezone
+  +--> Check plausible load values and meter interval
+  +--> Validate tariff calendar coverage
+  |
+  v
+[Tariff Calendar + Rates]
+  |
+  +--> Build 15-minute periods: base / intermedia / punta / semipunta
+  +--> Apply holiday rules
+  +--> Load monthly CFE/CNE rates and factor de carga
+  |
+  v
+[Baseline Bill Reconstruction]
+  |
+  +--> kWh by period
+  +--> Dmaxpunta, Dmaxmensual
+  +--> capacity billing kW and distribution billing kW
+  +--> invoice reconciliation
+  |
+  v
+[Optimization Engine]
+  |
+  +--> BESS-only dispatch
+  +--> PV+BESS no-export dispatch
+  +--> optional grid charging and backup reserve
+  |
+  v
+[Optimized Bill + Financials]
+  |
+  +--> savings by tariff component
+  +--> IRR, NPV, payback, sensitivity
+  |
+  v
+[Reports]
+  |
+  +--> Excel + PDF + dispatch CSV
+[End]
+[Heading 1] 6. Repository and Folder Structure
+[CodeBlock] Optimus_Mexico_Behind_TheMeter/
+  app.py
+  README.md
+  requirements.txt
+  config/
+    module_config.yaml
+    tariff_rules_mexico.yaml
+    bess_defaults.yaml
+    financial_defaults.yaml
+  data/
+    raw/
+      cfe_bills/
+      meter_data/
+      pv_profiles/
+      tariff_documents/
+    processed/
+      load_15min.parquet
+      pv_15min.parquet
+      tariff_calendar_15min.parquet
+      tariff_rates.parquet
+    reference/
+      mexico_holidays.csv
+      factor_carga.csv
+      tariff_periods.csv
+      cfe_divisions.csv
+      fx_mxn_usd.csv
+  modules/
+    ingestion/
+      bill_parser.py
+      meter_loader.py
+      pv_loader.py
+      tariff_table_loader.py
+    tariff_engine/
+      tariff_classifier.py
+      tariff_calendar_builder.py
+      demand_charge_engine.py
+      cfe_bill_engine.py
+      tariff_comparison.py
+    optimization/
+      bess_rule_dispatch.py
+      bess_lp_optimizer.py
+      pv_bess_lp_optimizer.py
+      no_export_controller.py
+    finance/
+      savings_attribution.py
+      capex_opex.py
+      irr_npv.py
+      sensitivity.py
+    reporting/
+      excel_report.py
+      pdf_summary.py
+      dispatch_plots.py
+      qa_report.py
+    scrapers/
+      cfe_tariff_scraper.py
+      cfe_acuerdos_scraper.py
+      cne_monthly_tfsb_scraper.py
+      banxico_fx_scraper.py
+      holiday_scraper.py
+      cenace_nodosp_scraper.py
+      cenace_pml_scraper.py
+  outputs/
+    baseline_bill_reconstruction.xlsx
+    optimized_dispatch_15min.csv
+    savings_report.xlsx
+    financial_summary.xlsx
+    executive_summary.pdf
+  tests/
+    test_tariff_calendar.py
+    test_bill_reconstruction.py
+    test_demand_charges.py
+    test_bess_soc.py
+    test_no_export.py
+[Heading 1] 7. Data Model and Required Input Schemas
+[Heading 2] 7.1 Customer configuration
+[CodeBlock] customer_id: string
+customer_name: string
+country: Mexico
+state: Ciudad de Mexico
+municipality: Coyoacan
+cfe_division: Valle de Mexico Sur
+tariff: GDMTH
+voltage_level: media_tension
+contracted_demand_kw: float
+connected_load_kw: float
+largest_motor_kw: float
+substation_kva: float
+power_factor_target: 0.90
+billing_day_start: integer | optional
+billing_day_end: integer | optional
+[Heading 2] 7.2 Meter data schema
+[Heading 2] 7.3 PV profile schema
+[Heading 2] 7.4 Tariff rates schema
+[CodeBlock] year,month,division,tariff,charge_component,period,unit,value_mxn,source_url,source_file
+2026,1,Valle de Mexico Sur,GDMTH,fixed,-,$/mes,422.07,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,energy,base,$/kWh,1.1170,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,energy,intermedia,$/kWh,1.8419,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,energy,punta,$/kWh,2.1538,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,distribution,-,$/kW,67.68,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,capacity,-,$/kW,401.78,cfe,manual
+[Heading 1] 8. Tariff Engine
+[Heading 2] 8.1 Supported tariffs
+[Heading 2] 8.2 Factor de carga table
+[Heading 2] 8.3 Tariff calendar logic
+[Normal] Build a complete 15-minute calendar and label every timestamp with season, day_type and period. For Valle de Mexico Sur use SIN period rules. GDMTH has summer/winter seasons; DIST and DIT have spring/summer/autumn/winter seasons in SIN. Holidays must be treated as Sunday/holiday periods according to CFE/CNE text.
+[CodeBlock] def build_tariff_calendar(start, end, tariff, division, holidays):
+    system = map_division_to_system(division)  # BC, BCS, or SIN
+    rows = []
+    for ts in pd.date_range(start, end, freq='15min', inclusive='left'):
+        is_holiday = ts.date() in holidays
+        day_type = classify_day_type(ts, is_holiday)  # weekday/saturday/sunday_holiday
+        season = classify_season(ts, tariff, system)
+        period = classify_period(ts.time(), tariff, system, season, day_type)
+        rows.append([ts, system, season, day_type, period, is_holiday])
+    return pd.DataFrame(rows, columns=['timestamp','system','season','day_type','period','is_holiday'])
+[Heading 2] 8.4 Baseline bill formulas
+[CodeBlock] interval_hours = 0.25
+Qmensual_kWh = sum(load_kw[t] * interval_hours)
+Dmaxmensual_kw = ceil(max(load_kw[t]))
+Dmaxpunta_kw = ceil(max(load_kw[t] where period == 'punta'))
+
+capacity_formula_kw = Qmensual_kWh / (24 * billing_days * factor_carga)
+capacity_billing_kw = min(Dmaxpunta_kw, capacity_formula_kw)
+
+distribution_formula_kw = Qmensual_kWh / (24 * billing_days * factor_carga)
+distribution_billing_kw = min(Dmaxmensual_kw, distribution_formula_kw)
+
+energy_charge = sum(kWh_period[p] * energy_rate[p])
+capacity_charge = capacity_billing_kw * capacity_rate_kw_month
+distribution_charge = distribution_billing_kw * distribution_rate_kw_month
+fixed_charge = fixed_rate_month
+bill_before_tax = energy_charge + capacity_charge + distribution_charge + fixed_charge
+[Normal] Implementation note: if the customer does not have peak-period demand measurement or if the period has no punta, use the consumption-based formula directly for capacity. Keep a configuration flag to handle customer-class exceptions.
+[Heading 1] 9. Optimization Engine
+[Heading 2] 9.1 Objective
+[CodeBlock] minimize total_cost =
+    energy_charges
+  + capacity_charge
+  + distribution_charge
+  + fixed_charge
+  + degradation_cost
+  + optional_unserved_energy_penalty
+[Heading 2] 9.2 Decision variables at each 15-minute interval
+[Heading 2] 9.3 Core constraints
+[CodeBlock] 0 <= charge_grid_kw[t] <= bess_power_kw
+0 <= charge_pv_kw[t] <= bess_power_kw
+0 <= discharge_kw[t] <= bess_power_kw
+soc_min_kwh <= soc_kwh[t] <= soc_max_kwh
+grid_import_kw[t] >= 0
+grid_export_kw[t] = 0  # default no-export mode
+
+soc[t] = soc[t-1]
+       + charge_grid_kw[t] * 0.25 * eta_charge
+       + charge_pv_kw[t] * 0.25 * eta_charge
+       - discharge_kw[t] * 0.25 / eta_discharge
+
+load_kw[t] = pv_to_load_kw[t] + discharge_kw[t] + grid_import_kw[t]
+pv_kw[t] = pv_to_load_kw[t] + charge_pv_kw[t] + pv_curtailed_kw[t] + grid_export_kw[t]
+[Heading 2] 9.4 Solvers
+[Heading 1] 10. Dispatch Strategies
+[Heading 1] 11. Scraper Specification
+[Normal] The system must support two data modes: starter/manual mode and scraper-update mode. Starter/manual mode reads uploaded tariff tables and customer files. Scraper-update mode refreshes public references while keeping all customer data local and user-provided.
+[Heading 2] 11.1 Scraper source URLs
+[Heading 2] 11.2 Scraper pseudo-code
+[CodeBlock] class TariffScraper:
+    def fetch(self, year:int, month:int, state:str, municipality:str, tariff:str) -> RawPage:
+        # Try CFE URL with query/postback or Playwright interaction.
+        # Save raw HTML/PDF to data/raw/tariff_documents/.
+        pass
+
+    def parse(self, raw:RawPage) -> pd.DataFrame:
+        # Return normalized rows:
+        # year, month, division, tariff, charge_component, period, unit, value_mxn
+        pass
+
+    def validate(self, df:pd.DataFrame):
+        # Ensure required charges by tariff:
+        # GDMTH: fixed, energy base/intermedia/punta, distribution, capacity
+        # GDMTO: fixed, energy ordinary, distribution, capacity
+        # DIST/DIT: fixed, hourly energy periods, capacity
+        pass
+
+    def persist(self, df:pd.DataFrame):
+        df.to_parquet('data/processed/tariff_rates.parquet')
+[Heading 1] 12. Financial Model
+[Heading 2] 12.1 Inputs
+[CodeBlock] bess_power_kw: float
+bess_energy_kwh: float
+bess_rte: 0.90
+soc_min_pct: 0.10
+capex_usd_per_kwh: float
+pcs_usd_per_kw: float
+ems_usd: float
+installation_pct: float
+opex_pct_capex_per_year: float
+analysis_years: 20
+discount_rate: float
+fx_mxn_usd: float
+tariff_escalation_pct: float
+load_growth_pct: float
+degradation_pct_per_year: float
+augmentation_year: optional int
+augmentation_cost_pct_initial_capex: optional float
+[Heading 2] 12.2 Outputs
+[Heading 1] 13. User Interface Screens
+[Heading 1] 14. Database Schema
+[CodeBlock] CREATE TABLE tariff_rates (
+  id INTEGER PRIMARY KEY,
+  year INTEGER,
+  month INTEGER,
+  division TEXT,
+  tariff TEXT,
+  charge_component TEXT,
+  period TEXT,
+  unit TEXT,
+  value_mxn REAL,
+  source_url TEXT,
+  source_file TEXT,
+  created_at TIMESTAMP
+);
+
+CREATE TABLE tariff_periods (
+  id INTEGER PRIMARY KEY,
+  tariff TEXT,
+  system TEXT,
+  season TEXT,
+  day_type TEXT,
+  period TEXT,
+  start_time TEXT,
+  end_time TEXT,
+  source TEXT
+);
+
+CREATE TABLE customer_meter_data (
+  id INTEGER PRIMARY KEY,
+  customer_id TEXT,
+  timestamp TIMESTAMP,
+  load_kw REAL,
+  pv_kw REAL,
+  grid_import_kw REAL,
+  grid_export_kw REAL,
+  power_factor REAL
+);
+
+CREATE TABLE dispatch_results (
+  id INTEGER PRIMARY KEY,
+  scenario_id TEXT,
+  timestamp TIMESTAMP,
+  load_kw REAL,
+  pv_kw REAL,
+  grid_import_kw REAL,
+  charge_kw REAL,
+  discharge_kw REAL,
+  soc_kwh REAL,
+  pv_curtailed_kw REAL,
+  grid_export_kw REAL
+);
+[Heading 1] 15. QA and Validation Rules
+[Heading 1] 16. Test Plan
+[Heading 1] 17. MVP Build Roadmap
+[Heading 1] 18. Developer Acceptance Criteria
+[List Bullet] Given 12 months of 15-minute load and monthly tariff rates, the module reconstructs the baseline CFE bill within 5% of the invoice before taxes/adjustments.
+[List Bullet] Given a BESS size, the optimizer returns a feasible dispatch with no SOC violations and no export in no-export mode.
+[List Bullet] The report shows before/after Dmaxpunta, Dmaxmensual, kWh by period, and savings by component.
+[List Bullet] The tariff calendar labels every 15-minute interval with the correct period for GDMTH/DIST/DIT and official holidays.
+[List Bullet] The GDMTO/GDMTH migration checker flags months where measured demand reaches or exceeds 100 kW.
+[List Bullet] Scraper outputs use the same normalized schema as manual starter data and include source URLs/files.
+[Heading 1] 19. Implementation Risks and Controls
+[Heading 1] 20. References
+[Heading 1] 21. Small Industrial Investor Layer
+[Normal] This section converts the technical optimizer into a decision tool for a small industrial investor or owner-manager. The goal is to answer a practical investment question: will the BESS reduce monthly cash outflow after financing, and is the risk acceptable under conservative operating assumptions?
+[Normal] The layer must simplify the output of the tariff, dispatch and finance engines into one investor-facing dashboard and one bank/investor evidence package. It should not replace the technical model; it sits on top of it and uses the optimized dispatch and reconstructed CFE bill as inputs.
+[Heading 2] 21.1 Investor decision flow
+[CodeBlock] [Baseline technical model]
+  |
+  v
+[Customer affordability inputs]
+  |-- monthly budget / target payback
+  |-- available capex or financing preference
+  |-- acceptable contract tenor
+  |-- backup/resilience priority
+  v
+[Investor sizing pre-screen]
+  |-- reject uneconomic BESS sizes
+  |-- flag rare/random peaks
+  |-- flag low demand-charge savings
+  v
+[Base / downside / upside investor cases]
+  |-- base: modeled savings with normal availability
+  |-- downside: tariff spread haircut + load reduction + BESS availability haircut
+  |-- upside: PV+BESS or higher self-consumption case
+  v
+[Monthly cash benefit calculation]
+  |-- CFE bill before BESS
+  |-- CFE bill after BESS
+  |-- financing or lease payment
+  |-- O&M and insurance
+  |-- net monthly benefit
+  v
+[Go / revise / no-go recommendation]
+  |-- go: positive net benefit under bank case
+  |-- revise: resize BESS or change contract/payment structure
+  |-- no-go: payback exceeds acceptable threshold or downside is negative
+[Heading 2] 21.2 Required investor module
+[Normal] Add the following module to the repository:
+[CodeBlock] modules/investor/
+  small_industry_investor.py
+  investor_dashboard.py
+  affordability.py
+  investor_red_flags.py
+  investor_case_builder.py
+[Normal] Core function signatures:
+[CodeBlock] def build_small_industry_investor_case(
+    baseline_bill: dict,
+    optimized_bill: dict,
+    finance_case: dict,
+    customer_config: dict,
+    risk_assumptions: dict
+) -> dict:
+    """Return base/downside/upside net monthly benefit, payback, and recommendation."""
+
+
+def calculate_net_monthly_benefit(
+    baseline_monthly_bill_mxn: float,
+    optimized_monthly_bill_mxn: float,
+    lease_or_debt_payment_mxn: float,
+    opex_mxn: float,
+    insurance_mxn: float = 0.0
+) -> float:
+    """Net benefit = CFE savings - financing/payment - O&M - insurance."""
+
+
+def detect_small_industry_red_flags(
+    load_profile_15min,
+    baseline_bill: dict,
+    optimized_bill: dict,
+    customer_config: dict,
+    finance_case: dict
+) -> list[dict]:
+    """Return warning flags that should be shown before investment approval."""
+[Heading 2] 21.3 Investor dashboard requirements
+[Normal] The UI must show a simple dashboard for an owner-manager or small industrial investor before showing detailed engineering outputs.
+[Heading 2] 21.4 Investor case assumptions
+[Normal] The model must separate the technical case from the investor case. The investor case should apply conservative haircuts to modeled savings and should include financing cost.
+[CodeBlock] investor_case:
+  modeled_annual_savings_mxn: float
+  savings_confidence_haircut: 0.90
+  bess_availability_haircut: 0.95
+  collection_or_payment_haircut: 0.95
+  tariff_spread_haircut_downside: 0.80
+  load_reduction_downside: 0.80
+  opex_mxn_per_year: float
+  insurance_mxn_per_year: float
+  financing_type: cash_purchase | equipment_lease | bank_loan | shared_savings
+  tenor_years: int
+  interest_rate: float
+  residual_value_mxn: float
+  required_min_net_monthly_benefit_mxn: float
+  required_max_payback_years: float
+[Normal] Bankable/investor savings should be calculated as:
+[CodeBlock] investor_bankable_savings = (
+    modeled_savings
+    * savings_confidence_haircut
+    * bess_availability_haircut
+    * collection_or_payment_haircut
+)
+
+net_monthly_benefit = (
+    investor_bankable_savings / 12
+    - monthly_lease_or_debt_payment
+    - monthly_opex
+    - monthly_insurance
+)
+[Heading 2] 21.5 Red-flag logic for small industrial customers
+[Normal] The system must generate warnings when the project is technically possible but commercially weak for a small industrial investor.
+[Heading 2] 21.6 Go / revise / no-go decision rules
+[Normal] Implement a deterministic recommendation engine so the output is not only descriptive.
+[CodeBlock] def investor_recommendation(metrics):
+    if metrics["data_quality_fail"]:
+        return "NO-GO: insufficient data quality"
+    if metrics["baseline_reconstruction_error_pct"] > 3:
+        return "REVISE: baseline bill must be reconciled before investment approval"
+    if metrics["downside_net_monthly_benefit_mxn"] < 0:
+        return "NO-GO: downside case has negative monthly cash benefit"
+    if metrics["simple_payback_years"] > metrics["max_payback_years"]:
+        return "REVISE: resize BESS or improve commercial structure"
+    if metrics["payback_years"] > metrics["warranty_years"]:
+        return "NO-GO: payback exceeds battery warranty period"
+    if metrics["customer_credit_score"] < metrics["minimum_credit_score"]:
+        return "REVISE: require guarantee, deposit, or customer-owned structure"
+    return "GO: proceed to quote, site survey, and contract negotiation"
+[Heading 2] 21.7 Recommended commercial structures for small industry
+[Heading 2] 21.8 Investor evidence package output
+[Normal] Add a compact output package that can be used by the customer, investor, equipment lessor or bank credit team.
+[CodeBlock] outputs/investor_package/
+  investor_dashboard.pdf
+  investor_dashboard.xlsx
+  monthly_cash_benefit.csv
+  red_flags.json
+  recommendation_summary.json
+  quote_assumption_sheet.xlsx
+[Normal] The investor package must include:
+[List Bullet] Executive one-page recommendation with BESS size, CAPEX, savings and net monthly benefit.
+[List Bullet] Baseline vs optimized CFE bill for each month.
+[List Bullet] Gross savings, net savings after financing, O&M and insurance.
+[List Bullet] Base/downside/upside cases with all haircuts clearly shown.
+[List Bullet] Small-industry red flags and required mitigants.
+[List Bullet] Backup-reserve trade-off, if backup mode is selected.
+[List Bullet] No-export compliance confirmation for PV+BESS cases.
+[List Bullet] Go / revise / no-go recommendation.
+[Heading 2] 21.9 Updated end-to-end flow including investor layer
+[CodeBlock] [Upload customer data]
+  |
+  v
+[Validate meter data + CFE bills]
+  |
+  v
+[Reconstruct baseline bill]
+  |
+  v
+[Optimize BESS / PV+BESS dispatch]
+  |
+  v
+[Calculate technical savings]
+  |
+  v
+[Apply investor case haircuts]
+  |
+  v
+[Calculate lease/debt/cash-purchase economics]
+  |
+  v
+[Run red-flag and affordability checks]
+  |
+  v
+[Generate dashboard + investor package]
+  |
+  v
+[Decision: GO / REVISE / NO-GO]
+[Heading 2] 21.10 Additional developer acceptance criteria for investor layer
+[List Bullet] Given baseline and optimized bills, the investor layer calculates gross and net monthly benefit after financing, O&M and insurance.
+[List Bullet] Given a BESS size matrix, the dashboard identifies the BESS size with the highest positive net monthly benefit subject to user constraints.
+[List Bullet] The system produces base, downside and upside cases and shows all haircuts used in the calculation.
+[List Bullet] The system flags projects where downside net monthly benefit is negative.
+[List Bullet] The system flags projects where payback exceeds the battery usable-capacity warranty period.
+[List Bullet] The system outputs an investor_dashboard.pdf and investor_dashboard.xlsx without requiring the user to inspect raw dispatch data.
+[List Bullet] The GO / REVISE / NO-GO recommendation must be reproducible from saved JSON metrics.
+[Normal] Implementation priority: add the investor layer after the baseline bill engine and BESS optimization engine are working. It should not block the MVP technical optimizer, but it is required before the tool is used for investment decisions with small industrial customers.
+[TABLE]
+Decision | Recommendation
+Primary MVP | CFE bill reconstruction and BESS peak-shaving optimizer at 15-minute resolution.
+Main target tariff | GDMTH; add GDMTO migration check and DIST/DIT support for larger industrial clients.
+Main value drivers | Capacity/demand reduction, distribution-demand reduction, peak-period energy reduction, PV self-consumption, optional backup reserve.
+Scraper priority | CFE/CNE monthly tariff tables first; holidays and Banxico FX second; CENACE NodosP/PML optional for MEM comparison.
+[TABLE]
+Source | Status | How the module uses it
+CNE/CFE 2026 tariff methodology: CT/11.SE/8-2025 | Uploaded | Defines 2026 tariff components, factor de carga, hourly periods, SCnMEM charge, and methodology.
+CNE June 2026 TFSB oficio F00.06.UE/1636/2026 | Uploaded | Shows the monthly CNE tariff table structure and confirms monthly generation-charge adjustment process.
+CFE tariff pages: GDMTH, GDMTO, DIST, DIT | User-copied starter values | Starter tariff rates for Valle de Mexico Sur, January 2026.
+CFE tariff portal | Scraper source | Monthly tariff rates by year, month, state/municipality/division, and tariff.
+CENACE NodosP and PML | Optional scraper source | Future MEM/qualified-user reference prices and node mapping.
+Banxico FIX | Scraper source | MXN/USD conversion for investment metrics.
+Ley Federal del Trabajo / holiday calendar | Scraper/static table | Classifies official holidays for tariff period calendar.
+[TABLE]
+Area | Included in MVP | Excluded / later phase
+Customer bill reconstruction | Yes: monthly CFE bill from 15-minute data and tariff table. | PDF/XML parser advanced reconciliation can be added after manual upload validation.
+BESS-only optimization | Yes: peak shaving, demand reduction, TOU energy shifting. | Real-time EMS control integration.
+PV+BESS autoconsumption | Yes in v1.1: no-export control and PV self-consumption. | Complex wheeling, remote generation, market settlement.
+Tariff comparison | GDMTO/GDMTH eligibility and migration warning; DIST/DIT only if voltage level matches. | Regulatory tariff-change application workflow.
+MEM / qualified-user comparison | Optional placeholder. | Not part of core behind-the-meter MVP.
+Scrapers | CFE/CNE tariffs, holidays, Banxico FX; optional CENACE. | Automated CFE bill retrieval from customer account unless authorized.
+[TABLE]
+Mode | Description | Primary business question
+Mode A: BESS-only | Battery charges from grid and discharges to reduce Dmaxpunta, Dmaxmensual and peak-period kWh. | What BESS size maximizes bill savings without PV?
+Mode B: PV+BESS no export | PV serves load first, surplus charges BESS, remaining surplus is curtailed unless export is enabled. | How much PV curtailment can be avoided and how much peak demand can be reduced?
+Mode C: PV+BESS + grid charging | Grid charging allowed only in base period unless optimizer proves savings. | Does grid-charging improve savings after RTE and degradation?
+Mode D: Backup reserve | Minimum SOC locked for critical load backup. | How much savings are sacrificed by resilience reserve?
+[TABLE]
+Column | Required | Type | Notes
+timestamp | Yes | datetime | Local Mexico timezone; 15-minute intervals.
+load_kw | Yes | float | Gross customer load before BESS dispatch.
+grid_import_kw | Optional | float | If available from meter/EMS.
+grid_export_kw | Optional | float | Used to validate no-export compliance.
+power_factor | Optional | float | Used for power-factor adjustment module.
+[TABLE]
+Column | Required | Type | Notes
+timestamp | Yes | datetime | 15-minute preferred; hourly accepted and resampled.
+pv_kw | Yes | float | AC generation profile.
+source | Optional | string | PVsyst, Solargis, inverter, SCADA.
+[TABLE]
+Tariff | Voltage / profile | Energy pricing | Demand pricing | MVP role
+GDMTO | Media tension, <100 kW | Ordinary single energy price | Capacity + distribution demand | Comparison and migration risk.
+GDMTH | Media tension, >=100 kW | Base/intermedia/punta | Capacity + distribution demand | Primary MVP tariff.
+DIST | High voltage, subtransmission | Base/intermedia/punta/semipunta where applicable | Capacity; no separate distribution charge in copied tables | Large-customer extension.
+DIT | High voltage, transmission | Base/intermedia/punta/semipunta where applicable | Capacity; no separate distribution charge in copied tables | Large-customer extension.
+[TABLE]
+Tariff | Factor de carga
+GDMTO | 0.55
+GDMTH | 0.57
+DIST | 0.74
+DIT | 0.71
+[TABLE]
+Variable | Unit | Description
+charge_grid_kw[t] | kW | Battery charge from grid.
+charge_pv_kw[t] | kW | Battery charge from PV surplus.
+discharge_kw[t] | kW | Battery discharge to load.
+soc_kwh[t] | kWh | Battery state of charge.
+grid_import_kw[t] | kW | Net import from CFE.
+grid_export_kw[t] | kW | Export to grid; set to zero in no-export mode.
+pv_to_load_kw[t] | kW | PV directly consumed by load.
+pv_curtailed_kw[t] | kW | Unused PV when export is blocked and BESS is full.
+[TABLE]
+Option | Use case | Recommendation
+Rule-based dispatch | Fast demo and sanity check | Implement first as benchmark.
+Linear programming with HiGHS/Pyomo or PuLP | Bankable monthly bill optimization | Main engine.
+Rolling horizon optimization | Real EMS simulation | Phase 2 after static historical optimization.
+[TABLE]
+Strategy | Priority logic | Value driver
+BESS-only peak shaving | Charge in base; discharge first in punta, second at monthly peak events. | Capacity + distribution + peak kWh.
+PV+BESS no export | PV to load, PV surplus to BESS, curtail residual, discharge in punta and demand-risk intervals. | PV self-consumption + demand reduction.
+Grid-charging enabled | Allow grid charge in base; block during punta; optional intermedia only if optimized savings positive. | TOU spread + demand control.
+Backup reserve | Keep minimum SOC for critical load. | Resilience; reduces bill-savings capacity.
+[TABLE]
+Scraper | Source | Frequency | Output | Implementation notes
+cfe_tariff_scraper.py | CFE industrial tariff pages | Monthly or on demand | tariff_rates.parquet/csv | Use browser/requests fallback. Page requires selecting year/month/state/municipality/division/tariff. Parse GDMTO/GDMTH/DIST/DIT tables.
+cfe_acuerdos_scraper.py | CFE acuerdos industria page | Monthly | raw PDF/HTML links + metadata | Discover official monthly CNE/CFE tariff documents and regulated tariff notices.
+cne_monthly_tfsb_scraper.py | CNE/CFE monthly TFSB PDFs | Monthly | component tariff table by division/tariff | Download PDFs; parse annex tables. Use OCR fallback only when embedded text unavailable.
+banxico_fx_scraper.py | Banxico FIX/SIE API | Daily/business days | fx_mxn_usd.csv | Use Banxico API token if configured; otherwise manual CSV upload fallback.
+holiday_scraper.py | PROFEDET/LFT Article 74 static logic | Annual | mexico_holidays.csv | Generate official rest days; exclude Article 74 IX when tariff text requires it.
+cenace_nodosp_scraper.py | CENACE NodosP/Nodos2 | Monthly/quarterly | nodosp_catalog.csv | Optional for MEM/qualified-user scenario.
+cenace_pml_scraper.py | CENACE Datos Abiertos / SW-PML | Daily/monthly | pml_mda_mtr.csv | Optional only; not needed for core CFE bill savings.
+[TABLE]
+Dataset | URL
+CFE industrial tariffs | https://app.cfe.mx/Aplicaciones/CCFE/Tarifas/TarifasCREIndustria/industria.aspx
+CFE industrial acuerdos | https://app.cfe.mx/Aplicaciones/CCFE/Tarifas/TarifasCREIndustria/Acuerdos/AcuerdosIndustria.aspx
+CFE GDMTH page | https://app.cfe.mx/Aplicaciones/CCFE/Tarifas/TarifasCREIndustria/Tarifas/GranDemandaMTH.aspx
+CFE DIST page | https://app.cfe.mx/Aplicaciones/CCFE/Tarifas/TarifasCREIndustria/Tarifas/DemandaIndustrialSub.aspx
+CFE DIT page | https://app.cfe.mx/Aplicaciones/CCFE/Tarifas/TarifasCREIndustria/Tarifas/DemandaIndustrialTran.aspx
+CENACE NodosP | https://www.cenace.gob.mx/Paginas/SIM/NodosP.aspx
+CENACE Nodos2 table | https://www.cenace.gob.mx/Nodos2.aspx
+Banxico FIX | https://www.banxico.org.mx/tipcamb/tipCamMIAction.do?idioma=sp
+Banxico SIE API docs | https://www.banxico.org.mx/SieAPIRest/service/v1/doc/series
+PROFEDET 2026 holidays | https://www.gob.mx/profedet/articulos/sabes-cuales-son-los-dias-de-descanso-obligatorio-para-este-2026
+[TABLE]
+Output | Description
+Annual savings MXN/USD | Difference between baseline bill and optimized bill.
+Savings by component | Energy, capacity, distribution, PV curtailment avoided, power factor if available.
+NPV, IRR, payback | Investor metrics using MXN or USD reporting currency.
+Sensitivity | BESS capex, tariff escalation, degradation, load growth, FX.
+[TABLE]
+Screen | Fields / widgets
+1. Customer setup | Customer name, division, tariff, voltage, contracted demand, connected load, largest motor, substation kVA.
+2. Uploads | CFE bills, 15-minute meter data, PV profile, manual tariff files.
+3. Baseline bill | Reconstructed bill, invoice comparison, energy by period, demand peaks.
+4. BESS sizing | BESS kW/kWh, RTE, SOC reserve, grid charging, no-export, backup reserve.
+5. Optimization results | Before/after bill, SOC chart, grid import before/after, peak reduction, savings attribution.
+6. Finance | CAPEX, OPEX, IRR, NPV, payback, sensitivity.
+7. Scraper/admin | Refresh tariffs, inspect scraper logs, choose manual fallback files.
+[TABLE]
+Check | Failure threshold | Action
+Missing 15-minute intervals | >1% missing | Fail import; require correction or interpolation approval.
+Duplicate timestamps | Any duplicates | Fail import.
+Incorrect interval | Not 15 minutes | Resample only with user approval.
+Negative load | Any negative load | Flag and require correction.
+Tariff calendar coverage | Any missing timestamp | Fail optimization.
+Invoice reconstruction error | >5% vs invoice | Warn; require bill parser/manual adjustments.
+SOC violation | Any min/max violation | Fail optimization.
+No-export violation | Any positive export in no-export mode | Fail scenario.
+GDMTO threshold | Peak >=100 kW | Flag GDMTH migration/reclassification risk.
+[TABLE]
+Test file | Tests
+test_tariff_calendar.py | SIN GDMTH winter/summer periods, DIST/DIT seasonal cutovers, holidays.
+test_bill_reconstruction.py | kWh by period, fixed charge, energy charges, monthly invoice tolerance.
+test_demand_charges.py | Dmaxpunta, Dmaxmensual, ceil rounding, factor de carga formulas.
+test_bess_soc.py | SOC balance, RTE, reserve SOC, no simultaneous charge/discharge.
+test_no_export.py | PV+BESS no-export constraint, PV curtailment logic.
+test_scrapers.py | CFE tariff parse, CNE PDF table parse, Banxico API fallback, NodosP parse.
+[TABLE]
+Phase | Duration | Deliverables
+Phase 0: Setup | 2-3 days | Repo, schemas, config files, sample Coyoacan/Valle de Mexico Sur tariff data.
+Phase 1: Bill engine | 1 week | 15-minute calendar, tariff rates, baseline CFE bill reconstruction.
+Phase 2: BESS optimizer | 1-2 weeks | Rule-based and LP dispatch; savings attribution.
+Phase 3: PV+BESS | 1 week | PV loader, no-export controller, PV curtailment and self-consumption reports.
+Phase 4: Financials and reports | 1 week | Excel/PDF outputs, IRR/NPV/payback, sensitivity.
+Phase 5: Scrapers | 1-2 weeks | CFE/CNE tariff scraper, Banxico FX, holidays, optional CENACE.
+[TABLE]
+Risk | Mitigation
+CFE web pages change format | Keep raw HTML/PDF snapshots; parser tests; manual upload fallback.
+PDF tariff tables are image-only | Use rendered-table/OCR fallback only for affected pages; require manual QA.
+Customer meter data incomplete | Run import QA; require interpolation approval for small gaps.
+Bill does not reconcile | Add manual adjustments: taxes, penalties, power factor, prior balances, rounding.
+Optimizing only energy spreads undervalues BESS | Objective includes capacity and distribution demand charges.
+Wrong season/holiday mapping | Use unit tests for every tariff season cutover and official holiday.
+[TABLE]
+Reference | Location
+CNE/CFE uploaded source | Acuerdo CT/11.SE/8-2025, Cálculo y Ajuste de las TFSB 2026, user-uploaded text file.
+CNE uploaded source | Oficio CNE F00.06.UE/1636/2026, TFSB junio 2026, user-uploaded PDF.
+CFE Industrial Tariffs | https://app.cfe.mx/Aplicaciones/CCFE/Tarifas/TarifasCREIndustria/industria.aspx
+CFE Industrial Acuerdos | https://app.cfe.mx/Aplicaciones/CCFE/Tarifas/TarifasCREIndustria/Acuerdos/AcuerdosIndustria.aspx
+CENACE NodosP | https://www.cenace.gob.mx/Paginas/SIM/NodosP.aspx
+CENACE Nodos2 | https://www.cenace.gob.mx/Nodos2.aspx
+Banxico FIX | https://www.banxico.org.mx/tipcamb/tipCamMIAction.do?idioma=sp
+Banxico SIE API | https://www.banxico.org.mx/SieAPIRest/service/v1/doc/series
+PROFEDET 2026 holidays | https://www.gob.mx/profedet/articulos/sabes-cuales-son-los-dias-de-descanso-obligatorio-para-este-2026
+[TABLE]
+Widget / KPI | Developer calculation | Investor interpretation
+Monthly CFE bill before BESS | Average or selected-month baseline reconstructed bill | Current cost burden
+Monthly CFE bill after BESS | Optimized bill from dispatch engine | Expected post-BESS bill
+Gross monthly savings | Baseline bill - optimized bill | Technical savings before financing
+Monthly lease / debt payment | Finance module amortization or user input | Required cash outflow
+Net monthly benefit | Gross savings - lease/debt - O&M - insurance | Actual cash improvement
+Simple payback | CAPEX / annual gross savings | Unlevered investment recovery
+Worst-month savings | Minimum monthly savings over 12 months | Downside seasonality risk
+Backup hours available | Usable reserve kWh / critical load kW | Resilience value
+Recommended BESS size | Best net benefit subject to constraints | System size to quote
+Go / revise / no-go | Rule-based decision gate | Investment recommendation
+[TABLE]
+Red flag | Detection rule | Recommended action
+Rare/random demand peaks | Top 5 peak intervals account for most savings or peak events are not repeated | Use smaller BESS or require forecast/EMS confidence haircut
+Flat load profile | Dmax / average load ratio is low and demand-charge reduction is limited | Do not oversize BESS; evaluate PV self-consumption instead
+Low demand charge impact | Capacity + distribution savings are less than required share of total savings | Avoid project unless energy shifting/PV savings are strong
+Weak tariff spread | Peak/base spread is too small after RTE and degradation | Do not rely on energy arbitrage
+Savings depend on tariff escalation | Positive IRR only under high escalation scenario | Require bank case with zero or low escalation
+Payback beyond warranty | Simple payback greater than usable battery warranty period | Reject or reduce CAPEX/size
+Customer weak credit | Credit score below threshold or poor CFE payment history | Require deposit, parent guarantee, or customer-owned model
+Insufficient site term | Lease/site control shorter than financing tenor | Reject financing or shorten tenor
+Backup reserve erodes savings | Reserve SOC materially reduces peak-shaving savings | Show separate backup vs savings trade-off
+No-export compliance risk | PV+BESS dispatch produces any export in no-export mode | Modify EMS/no-export controller before approval
+[TABLE]
+Structure | When to use | Model treatment
+Cash purchase | Customer has capital and wants full savings | Show simple payback, IRR, and warranty risk
+Equipment lease | Customer wants monthly payment and simple ownership path | Subtract lease payment from monthly savings
+Bank loan | Customer or project SPV can borrow | Calculate DSCR and debt service
+Shared savings | Customer avoids capex but savings must be measured | Use M&V engine and split verified savings
+Fixed payment + upside sharing | Best compromise for small industry | Fixed monthly payment plus optional share of savings above guarantee

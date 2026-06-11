@@ -1,0 +1,35 @@
+project:
+  name: Optimus Mexico Demo
+  system: SIN
+  market: MTR
+  currency: MXN
+  node_code: null   # Never hard-code node names. Use official Clave NodoP only.
+
+pml:
+  source: cenace_sw_pml
+  start_date: '2026-01-01'
+  end_date: '2026-01-07'
+  anonymize_outputs: true
+
+pv:
+  mw_ac: 100
+  dc_ac_ratio: 1.25
+  annual_degradation: 0.004
+
+bess:
+  mw: 50
+  mwh: 200
+  rte: 0.925
+  reserve_fraction: 0.10
+  daily_cycle_limit: 1.0
+  allow_grid_charging: false
+
+ppa:
+  enabled: false
+  flat_mw: 0
+  price_mxn_mwh: 0
+
+optimizer:
+  bess_durations_h: [2, 4, 6, 8]
+  bess_power_mw: [25, 50, 75, 100]
+  pv_mw_ac: [50, 75, 100, 125, 150]

@@ -1,0 +1,7 @@
+year,month,division,tariff,charge_component,period,unit,value_mxn,source_url,source_file
+2026,1,Valle de Mexico Sur,GDMTH,fixed,-,$/mes,422.07,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,energy,base,$/kWh,1.1170,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,energy,intermedia,$/kWh,1.8419,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,energy,punta,$/kWh,2.1538,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,distribution,-,$/kW,67.68,cfe,manual
+2026,1,Valle de Mexico Sur,GDMTH,capacity,-,$/kW,401.78,cfe,manual
