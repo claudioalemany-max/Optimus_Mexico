@@ -20,6 +20,9 @@ Included now:
 
 3. **PV Loader Agent**
    - Loads PV 8760 data from CSV/XLSX.
+   - **PV synthesis** (`agents/pv_synthesis_agent.py`): enter MW AC, MWp, yield
+     (kWh/kWp/year) and degradation (%/year) to generate an hourly or 15-minute
+     production profile scaled to the computed annual MWh (with AC clipping).
 
 4. **Dispatch Agent**
    - `price_rank` engine: simple, auditable daily price-rank dispatch.
@@ -80,8 +83,39 @@ annual revenue by stream, and monthly revenue stacked by PPA/merchant.
      charts, savings by tariff component, daily dispatch viewer (load, grid
      import, PV, import cap, SOC) and the investor dashboard.
 
+10. **BTM Investor Fix package** (from `Optimus_Mexico_BTM_Investor_Fixes_Developer_Ready.docx`):
+   - **Fix 1 — BTM revenue guard** (`agents/btm_revenue_guard.py`): when
+     `project_mode = BTM_CFE`, merchant/PML/PPA/CENACE capacity streams are
+     excluded; only CFE bill savings and PV self-consumption count.
+   - **Fix 2 — LP bankable dispatch** (`agents/btm_lp_optimizer_agent.py`):
+     daily LP at 15-minute resolution with monthly import-cap sweep, post-bill
+     CFE recalculation, and safe fallback to rule-based dispatch if the solver
+     fails. Selectable in the app: rule-based screening, LP bankable, or compare both.
+   - **Fix 3 — Investment readiness gate** (`agents/btm_investment_readiness_agent.py`):
+     every case is labeled **DEMO | SCREENING | REVISE | INVESTMENT READY**.
+     GO/REVISE/NO-GO is blocked unless status is INVESTMENT READY; sample data
+     always runs in DEMO mode.
+   - BTM sub-workflows in the app: **A. Screening Case**, **B. Bankable Investor
+     Case**, **C. Customer Proposal Case**, **D. Technical Dispatch Detail**.
+   - CLI helpers: `scripts/run_btm_readiness.py`, `scripts/run_btm_lp.py`,
+     `scripts/make_btm_investor_package.py`.
+
+11. **Front-of-meter project economics** (`agents/fom_investor_agent.py`):
+   - CAPEX from PV (USD/kWp) + BESS (USD/kWh), OPEX and insurance (% CAPEX/yr),
+     financing (cash / loan / lease), project life and discount rate.
+   - **Project IRR** (unlevered and levered) on merchant + PPA + capacity revenue
+     after OPEX; NPV and payback shown in the app after each wholesale run.
+
+12. **BTM savings IRR** — shown for all BTM workflows:
+   - **IRR on CFE savings** (unlevered): modeled bill savings minus OPEX/insurance vs CAPEX.
+   - **IRR on CFE savings** (levered): bankable savings net of financing payments.
+   - CAPEX includes PV + BESS when in PV+BESS mode.
+
 The app navigation is a horizontal menu at the top of the page:
-How it works | 0. Node Resolver | 1. Dispatch + PPA + Capacity | 2. Behind-the-Meter (CFE).
+How it works | 0. Node Resolver | 1. Front-of-Meter Dispatch + PPA + Capacity | 2. Behind-the-Meter (CFE).
+
+Both PV-enabled modules accept **uploaded production profiles** or **PV system specs**
+(MW AC, MWp, yield kWh/kWp/year, degradation %/year). Set MWp = 0 for BESS-only cases.
 
 ## Install
 
@@ -127,6 +161,9 @@ Outputs land in `outputs/reports/` as `.xlsx`, `.docx`, `.pdf` and `.pptx`.
 ```bash
 pytest tests -q
 ```
+
+Currently **71 tests** (wholesale dispatch, BTM tariff/bill/dispatch/investor, BTM fix
+package, PV synthesis, FOM economics).
 
 ## Module 0: Extract nodes from a PML PDF
 
@@ -218,18 +255,25 @@ Optimus_Mexico/
 │   ├── node_map_agent.py
 │   ├── pml_scraper_agent.py
 │   ├── pv_loader_agent.py
-│   ├── dispatch_agent.py       # price_rank + LP wholesale dispatch
+│   ├── pv_synthesis_agent.py     # MW AC / MWp / yield → hourly or 15-min profile
+│   ├── dispatch_agent.py         # price_rank + LP wholesale dispatch
 │   ├── optimizer_agent.py
 │   ├── ppa_agent.py
 │   ├── capacity_agent.py
-│   ├── printout_agent.py       # Excel/Word/PDF/PPT + investor report
-│   ├── btm_tariff_agent.py     # CFE tariff calendar + bill reconstruction
-│   ├── btm_dispatch_agent.py   # 15-min BESS/PV+BESS no-export dispatch
-│   └── btm_investor_agent.py   # investor cases, NPV/IRR, GO/REVISE/NO-GO
+│   ├── printout_agent.py         # Excel/Word/PDF/PPT + investor report
+│   ├── fom_investor_agent.py     # FOM CAPEX/OPEX/IRR on revenue
+│   ├── btm_tariff_agent.py       # CFE tariff calendar + bill reconstruction
+│   ├── btm_dispatch_agent.py     # 15-min BESS/PV+BESS no-export dispatch
+│   ├── btm_lp_optimizer_agent.py # LP bankable BTM dispatch
+│   ├── btm_revenue_guard.py      # BTM-only value streams
+│   ├── btm_investment_readiness_agent.py  # DEMO/SCREENING/REVISE/INVESTMENT READY
+│   └── btm_investor_agent.py     # BTM savings IRR, NPV, GO/REVISE/NO-GO
+├── ui/
+│   └── pv_system_panel.py        # shared Streamlit PV specs / upload panel
 ├── core/
 │   └── node_utils.py
 ├── scripts/
-├── tests/                      # pytest suite (42 tests)
+├── tests/                        # pytest suite (71 tests)
 ├── data/
 │   ├── catalogs/               # CENACE node catalogs (incl. enriched)
 │   ├── reference/              # tariff periods, starter rates, factor de carga
@@ -242,6 +286,6 @@ Optimus_Mexico/
 
 1. Harden CENACE PML endpoint handling after testing against live service.
 2. Calibrate capacity price and critical-hour list against official CENACE publications.
-3. Multi-year PPA cash-flow model (currently single-year with escalation hooks).
-4. BTM phase 2: CFE/CNE tariff scrapers, PDF bill parser, DIST/DIT tariffs, LP dispatch.
+3. Multi-year PPA and PV degradation in cash-flow models.
+4. BTM phase 2: CFE/CNE tariff scrapers, PDF bill parser, DIST/DIT tariffs.
 5. Integrate into Optimus AI.

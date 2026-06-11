@@ -148,12 +148,16 @@ def build_small_industry_investor_case(
         modeled_savings - finance.opex_mxn_per_year - finance.insurance_mxn_per_year
     ] * max(int(round(finance.bess_life_years)), 1)
     project_irr = irr(unlevered)
+    levered_irr = irr(flows_base)
 
     return {
         "baseline_annual_bill_mxn": baseline_annual,
         "optimized_annual_bill_mxn": optimized_annual,
         "modeled_annual_savings_mxn": modeled_savings,
         "bankable_annual_savings_mxn": bankable,
+        "capex_mxn": finance.capex_mxn,
+        "annual_opex_mxn": finance.opex_mxn_per_year,
+        "annual_insurance_mxn": finance.insurance_mxn_per_year,
         "monthly_financing_payment_mxn": pay,
         "monthly_opex_insurance_mxn": monthly_costs,
         "annual_financing_payment_mxn": pay * 12,
@@ -171,6 +175,8 @@ def build_small_industry_investor_case(
         "npv_downside_mxn": npv(flows_downside, finance.discount_rate),
         "lifetime_net_benefit_base_mxn": sum(flows_base),
         "project_irr_pct": project_irr * 100 if project_irr is not None else None,
+        "savings_irr_unlevered_pct": project_irr * 100 if project_irr is not None else None,
+        "savings_irr_levered_pct": levered_irr * 100 if levered_irr is not None else None,
         "haircuts": {
             "savings_confidence": risk.savings_confidence_haircut,
             "bess_availability": risk.bess_availability_haircut,
@@ -251,8 +257,13 @@ def investor_recommendation(case: dict, finance: FinanceCase,
                             risk: RiskAssumptions | None = None,
                             red_flags: list[dict] | None = None,
                             baseline_error_pct: float = 0.0,
-                            data_quality_fail: bool = False) -> str:
-    """Deterministic GO / REVISE / NO-GO gate (spec 21.6)."""
+                            data_quality_fail: bool = False,
+                            readiness_status: str | None = None) -> str:
+    """Deterministic GO / REVISE / NO-GO gate (spec 21.6 + Fix 3)."""
+    from agents.btm_investment_readiness_agent import STATUS_INVESTMENT_READY
+
+    if readiness_status and readiness_status != STATUS_INVESTMENT_READY:
+        return f"BLOCKED: case status is {readiness_status} — investor recommendation requires INVESTMENT READY data"
     risk = risk or RiskAssumptions()
     if data_quality_fail:
         return "NO-GO: insufficient data quality"
@@ -298,7 +309,10 @@ def write_investor_package(
         - case["monthly_financing_payment_mxn"]
         - case["monthly_opex_insurance_mxn"]
     )
+    watermark = case.get("report_watermark", "")
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+        if watermark:
+            pd.DataFrame([{"notice": watermark}]).to_excel(writer, sheet_name="Notice", index=False)
         investor_dashboard_frame(case, recommendation).to_excel(writer, sheet_name="Dashboard", index=False)
         monthly.to_excel(writer, sheet_name="Monthly_Cash_Benefit", index=False)
         baseline_bills.to_excel(writer, sheet_name="Baseline_Bills", index=False)
@@ -335,6 +349,23 @@ def investor_dashboard_frame(case: dict, recommendation: str) -> pd.DataFrame:
         (f"NPV over BESS life — downside (MXN)", f"{case['npv_downside_mxn']:,.0f}"),
         ("Lifetime net benefit — base (MXN)", f"{case['lifetime_net_benefit_base_mxn']:,.0f}"),
         ("Project IRR (unlevered)", irr_txt),
-        ("Recommendation", recommendation),
+        ("IRR on CFE savings — unlevered", irr_txt),
     ]
-    return pd.DataFrame(rows, columns=["metric", "value"])
+    if case.get("savings_irr_levered_pct") is not None:
+        rows.append(("IRR on CFE savings — levered", f"{case['savings_irr_levered_pct']:.1f}%"))
+    if case.get("capex_mxn") is not None:
+        rows.insert(0, ("Total CAPEX (MXN)", f"{case['capex_mxn']:,.0f}"))
+        rows.insert(1, ("Annual OPEX (MXN)", f"{case.get('annual_opex_mxn', 0):,.0f}"))
+        rows.insert(2, ("Annual insurance (MXN)", f"{case.get('annual_insurance_mxn', 0):,.0f}"))
+    rows.extend([
+        ("Recommendation", recommendation),
+    ])
+    if case.get("readiness_status"):
+        rows.insert(0, ("Case status", case["readiness_status"]))
+    if case.get("dispatch_engine"):
+        rows.insert(1 if case.get("readiness_status") else 0, ("Dispatch engine", case["dispatch_engine"]))
+    if case.get("btm_value_streams"):
+        for stream, val in case["btm_value_streams"].items():
+            rows.append((f"BTM stream — {stream}", f"{val:,.0f}"))
+    df = pd.DataFrame(rows, columns=["metric", "value"])
+    return df.astype({"metric": "string", "value": "string"})

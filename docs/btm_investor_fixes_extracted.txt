@@ -1,0 +1,367 @@
+[Normal] Optimus Mexico Behind-the-Meter Investor Fixes
+[Normal] Developer-ready design, flow and implementation plan
+[Normal] Module target: Optimus_Mexico_Behind_TheMeter | Fix package: BTM investment-grade workflow
+[Normal] Document objective: translate the consultant/investor review into programmable changes. The fixes make the app safe for small industrial investor screening and more credible for bank/lender review. They do not replace legal, tax, credit or engineering diligence.
+[Heading 1] 1. Executive Summary
+[Normal] The current Optimus Mexico app already includes front-of-meter node/PML/PPA/capacity tools and a Behind-the-Meter CFE module. The three critical fixes are designed to prevent users from confusing merchant revenues with behind-the-meter savings, to improve dispatch accuracy through LP optimization, and to prevent investment recommendations when the input data is synthetic or insufficient.
+[Heading 1] 2. Current App Context
+[Normal] The README indicates the current app has Node Resolver, PML Scraper, PV Loader, Dispatch, Optimizer, PPA/CFE mixed-development, Capacity, Printout and Behind-the-Meter CFE modules. The BTM module already includes tariff calendar, CFE bill reconstruction, rule-based dispatch, investor cases, red flags and GO/REVISE/NO-GO logic. The next step is to strengthen these with a strict BTM-only investor workflow, LP dispatch and data-quality gates.
+[Heading 1] 3. Target User Journeys After Fixes
+[Heading 1] 4. Fix 1 - Separate Bankable BTM Investor Case from Merchant/PPA Logic
+[Heading 2] 4.1 Design intent
+[Normal] When project_mode = BTM_CFE, the app must disable merchant/PML/PPA/CENACE capacity revenue streams. Behind-the-meter investment should be based on avoided CFE bill components, PV self-consumption and optional backup/resilience value only.
+[Heading 2] 4.2 Navigation change
+[CodeBlock] Top navigation:
+How it works | 0. Node Resolver | 1. Front-of-Meter Dispatch + PPA + Capacity | 2. Behind-the-Meter (CFE)
+
+Inside 2. Behind-the-Meter (CFE):
+  A. Screening Case
+  B. Bankable Investor Case
+  C. Customer Proposal Case
+  D. Technical Dispatch Detail
+[Heading 2] 4.3 Developer implementation
+[CodeBlock] # agents/btm_revenue_guard.py
+ALLOWED_BTM_VALUE_STREAMS = [
+    "cfe_energy_savings",
+    "cfe_capacity_savings",
+    "cfe_distribution_savings",
+    "pv_self_consumption_value",
+    "backup_value_optional"
+]
+
+DISABLED_IN_BTM = [
+    "pml_merchant_revenue",
+    "ppa_revenue",
+    "cenace_capacity_revenue",
+    "ancillary_services_revenue"
+]
+
+def enforce_btm_revenue_scope(project_mode: str, selected_streams: list[str]) -> dict:
+    disabled = []
+    allowed = selected_streams
+    if project_mode == "BTM_CFE":
+        disabled = [s for s in selected_streams if s in DISABLED_IN_BTM]
+        allowed = [s for s in selected_streams if s in ALLOWED_BTM_VALUE_STREAMS]
+    return {
+        "allowed_streams": allowed,
+        "disabled_streams": disabled,
+        "is_valid": len(disabled) == 0,
+        "message": "BTM_CFE mode excludes merchant/PPA/CENACE capacity revenues." if disabled else "OK"
+    }
+[Heading 2] 4.4 Flow
+[CodeBlock] User selects module 2. Behind-the-Meter (CFE)
+        ↓
+Set project_mode = BTM_CFE
+        ↓
+Run btm_revenue_guard.enforce_btm_revenue_scope()
+        ↓
+Hide/disable PML merchant, PPA and CENACE capacity controls
+        ↓
+Show BTM-only value streams and investor case
+        ↓
+Generate BTM-only reports
+[Heading 2] 4.5 Acceptance criteria
+[Heading 1] 5. Fix 2 - Add LP Optimizer as Bankable BTM Dispatch Engine
+[Heading 2] 5.1 Design intent
+[Normal] Rule-based dispatch remains as a fast screening engine. The new LP optimizer becomes the default for Bankable Investor Case. It must jointly optimize demand charge reduction, energy period shifting, PV self-consumption, no-export compliance, degradation cost and optional reserve SOC.
+[Heading 2] 5.2 New file
+[CodeBlock] agents/btm_lp_optimizer_agent.py
+[Heading 2] 5.3 LP objective
+[CodeBlock] Minimize:
+  total_energy_charge_mxn
++ capacity_charge_mxn
++ distribution_charge_mxn
++ degradation_cost_mxn
++ optional_backup_reserve_penalty
++ optional_unserved_energy_penalty
+[Heading 2] 5.4 Decision variables
+[Heading 2] 5.5 Constraints
+[CodeBlock] For each 15-minute interval t:
+0 <= charge_pv_kw[t] <= bess_power_kw
+0 <= charge_grid_kw[t] <= bess_power_kw if grid_charge_enabled else 0
+0 <= discharge_kw[t] <= bess_power_kw
+soc_min_kwh <= soc_kwh[t] <= soc_max_kwh
+grid_import_kw[t] >= 0
+grid_export_kw[t] == 0 if no_export_mode else >= 0
+
+SOC balance:
+soc[t] = soc[t-1] + 0.25 * eta_charge * (charge_pv_kw[t] + charge_grid_kw[t]) - 0.25 * discharge_kw[t] / eta_discharge
+
+Load balance:
+load_kw[t] = pv_to_load_kw[t] + discharge_kw[t] + grid_import_kw[t]
+
+PV balance:
+pv_kw[t] = pv_to_load_kw[t] + charge_pv_kw[t] + pv_curtailed_kw[t] + grid_export_kw[t]
+
+Demand constraints by month m:
+Dmaxpunta_after[m] >= grid_import_kw[t] for all t in punta period in month m
+Dmaxmensual_after[m] >= grid_import_kw[t] for all t in month m
+billing_capacity_kw[m] = min_proxy(Dmaxpunta_after[m], Qmensual_after / (24 * days * factor_carga))
+billing_distribution_kw[m] = min_proxy(Dmaxmensual_after[m], Qmensual_after / (24 * days * factor_carga))
+[Heading 2] 5.6 Handling min() in LP
+[Normal] Because min() is non-linear, implement the billing-demand calculation after optimization for v1, or use auxiliary variables and conservative formulation in v2. For MVP bankable LP, optimize against measured peak reduction and energy cost, then calculate final bill with the existing CFE bill engine. Use an iterative target-cap loop if exact demand-charge optimization is required without mixed-integer variables.
+[Heading 2] 5.7 Engine selection in UI
+[CodeBlock] Dispatch engine:
+  - Rule-based fast screening
+  - LP bankable optimization [default for Bankable Investor Case]
+  - Compare both engines
+[Heading 2] 5.8 Developer function signature
+[CodeBlock] def optimize_btm_lp_dispatch(
+    load_15min: pd.DataFrame,
+    pv_15min: pd.DataFrame | None,
+    tariff_calendar: pd.DataFrame,
+    tariff_rates: pd.DataFrame,
+    bess_config: dict,
+    customer_config: dict,
+    optimizer_config: dict,
+) -> dict:
+    """
+    Returns dispatch_15min, optimized_bill, savings_by_component,
+    feasibility_status, warnings and solver metadata.
+    """
+[Heading 2] 5.9 Comparison outputs
+[Heading 2] 5.10 Acceptance criteria
+[Heading 1] 6. Fix 3 - Investment Readiness Gate and Bill Reconciliation
+[Heading 2] 6.1 Design intent
+[Normal] The app must not produce GO/NO-GO investor recommendations from synthetic data, incomplete data or poor bill reconciliation. Every case must be labeled DEMO, SCREENING or INVESTMENT READY.
+[Heading 2] 6.2 New module
+[CodeBlock] agents/btm_investment_readiness_agent.py
+[Heading 2] 6.3 Readiness statuses
+[Heading 2] 6.4 Required gates
+[Heading 2] 6.5 Developer function signature
+[CodeBlock] def evaluate_investment_readiness(
+    customer_files: dict,
+    meter_quality: dict,
+    bill_reconstruction: dict,
+    project_config: dict,
+) -> dict:
+    """
+    Returns status, blocking_issues, warnings, allowed_actions,
+    required_next_files and confidence_score.
+    """
+[Heading 2] 6.6 Pseudocode
+[CodeBlock] def evaluate_investment_readiness(customer_files, meter_quality, bill_reconstruction, project_config):
+    issues = []
+    warnings = []
+
+    if project_config.get("uses_synthetic_data", False):
+        return status("DEMO", ["Synthetic sample data in use"], allowed=["view_demo", "export_demo_report"])
+
+    if customer_files.get("cfe_bill_months", 0) < 12:
+        issues.append("Upload 12 monthly CFE bills")
+    if meter_quality.get("months_15min", 0) < 12:
+        issues.append("Upload 12 months of 15-minute load data")
+    if meter_quality.get("missing_interval_pct", 100) > 1:
+        issues.append("15-minute meter data has more than 1% missing intervals")
+    if not project_config.get("tariff_confirmed", False):
+        issues.append("Confirm CFE tariff and division")
+
+    if issues:
+        return status("SCREENING", issues, allowed=["indicative_savings", "data_request"])
+
+    if bill_reconstruction.get("annual_error_pct", 100) > 3:
+        return status("REVISE", ["Baseline bill reconstruction error exceeds 3%"], allowed=["qa_report"])
+
+    if bill_reconstruction.get("months_failed", 0) > 2:
+        return status("REVISE", ["Too many monthly reconstruction failures"], allowed=["qa_report"])
+
+    return status("INVESTMENT_READY", warnings, allowed=["go_revise_nogo", "investor_report", "evidence_package"])
+[Heading 2] 6.7 UI requirements
+[Heading 2] 6.8 Acceptance criteria
+[Heading 1] 7. End-to-End Flow After Fixes
+[CodeBlock] 1. User enters BTM module
+2. App sets project_mode = BTM_CFE and activates revenue guard
+3. User uploads CFE bills, 15-min load, tariff data, PV profile if needed
+4. Data quality engine validates timestamps, missing intervals, tariff coverage and synthetic flags
+5. Baseline bill engine reconstructs CFE bills and calculates error
+6. Investment readiness agent labels case: DEMO, SCREENING, REVISE or INVESTMENT READY
+7. If SCREENING/REVISE: show indicative output and data correction actions only
+8. If INVESTMENT READY: user selects BESS/PV+BESS sizing scenarios
+9. LP optimizer runs bankable dispatch; rule-based engine can be shown for comparison
+10. Bill engine calculates optimized CFE bill using the same tariff logic as baseline
+11. Investor agent applies haircuts, financing terms and red-flag logic
+12. App produces customer dashboard, investor case and evidence package
+[Heading 1] 8. Data Model Additions
+[CodeBlock] CREATE TABLE btm_case_status (
+    case_id TEXT PRIMARY KEY,
+    status TEXT, -- DEMO, SCREENING, REVISE, INVESTMENT_READY
+    confidence_score REAL,
+    blocking_issues_json TEXT,
+    warnings_json TEXT,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE btm_bill_reconciliation (
+    id INTEGER PRIMARY KEY,
+    case_id TEXT,
+    billing_month TEXT,
+    actual_bill_mxn REAL,
+    reconstructed_bill_mxn REAL,
+    error_mxn REAL,
+    error_pct REAL,
+    actual_kwh REAL,
+    reconstructed_kwh REAL,
+    actual_demand_kw REAL,
+    reconstructed_demand_kw REAL,
+    pass_flag INTEGER
+);
+
+CREATE TABLE btm_dispatch_engine_runs (
+    id INTEGER PRIMARY KEY,
+    case_id TEXT,
+    engine TEXT, -- rule_based, lp
+    solver TEXT,
+    solver_status TEXT,
+    objective_value_mxn REAL,
+    annual_savings_mxn REAL,
+    bankable_savings_mxn REAL,
+    created_at TIMESTAMP
+);
+[Heading 1] 9. Report Changes
+[Heading 1] 10. Test Plan
+[Heading 1] 11. Implementation Roadmap
+[Heading 1] 12. Developer Definition of Done
+[List Bullet] BTM_CFE mode cannot include merchant/PPA/CENACE capacity revenues.
+[List Bullet] Every BTM case has a visible data status: DEMO, SCREENING, REVISE or INVESTMENT READY.
+[List Bullet] GO/REVISE/NO-GO recommendations are blocked unless status is INVESTMENT READY.
+[List Bullet] Baseline CFE bill reconciliation is shown and must pass <= 3% error threshold for investment-ready cases.
+[List Bullet] LP optimizer runs with clear solver status and falls back safely if infeasible.
+[List Bullet] Reports clearly state dispatch engine, data readiness status, source assumptions and limitations.
+[List Bullet] All new modules have unit tests and integration tests with synthetic and real-like samples.
+[Heading 1] Appendix A - Configuration Keys
+[CodeBlock] btm:
+  project_mode: BTM_CFE
+  status_required_for_investor_recommendation: INVESTMENT_READY
+  max_bill_reconstruction_error_pct: 3.0
+  max_missing_interval_pct: 1.0
+  min_bill_months: 12
+  min_load_months: 12
+  default_dispatch_engine_screening: rule_based
+  default_dispatch_engine_investor: lp
+  no_export_default: true
+  disable_non_btm_revenue_streams: true
+  screening_report_watermark: true
+
+lp_optimizer:
+  solver: highs
+  fallback_to_rule_based: true
+  max_runtime_seconds: 180
+  enforce_soc_limits: true
+  enforce_no_export: true
+  allow_grid_charging_default: false
+  degradation_cost_required_for_investor_case: true
+[Heading 1] Appendix B - CLI Examples
+[CodeBlock] # Run readiness gate only
+python scripts/run_btm_readiness.py --case-id CUSTOMER_001 --out outputs/btm/readiness_report.json
+
+# Run BTM LP optimization after investment readiness passes
+python scripts/run_btm_lp.py   --load data/customer/load_15min.csv   --pv data/customer/pv_15min.csv   --tariff GDMTH   --division "Valle de Mexico Sur"   --bess-kw 500   --bess-kwh 1000   --no-export   --out outputs/btm/CUSTOMER_001
+
+# Generate investor evidence package
+python scripts/make_btm_investor_package.py --case-id CUSTOMER_001 --out outputs/btm/CUSTOMER_001
+[TABLE]
+Fix | Problem solved | Required result
+Fix 1 - Clean BTM Investor Workflow | Merchant/PPA tools and CFE BTM tools are in the same app, which may confuse investors about revenue sources. | BTM mode must show only CFE bill savings, PV self-consumption, optional backup value and financing results.
+Fix 2 - BTM LP Optimizer | Rule-based BTM dispatch is useful for screening but not robust enough for financing-grade sizing. | Add LP optimization as the bankable dispatch engine and compare rule-based, LP, operational-haircut and bankable savings.
+Fix 3 - Investment Readiness Gate | Synthetic data and incomplete uploads can lead to false GO/NO-GO conclusions. | No investor recommendation unless required bill, meter, tariff and reconciliation checks pass.
+[TABLE]
+User | Journey | Expected app behavior
+Small industrial customer | Wants to know if a BESS reduces monthly CFE bill and whether lease payment is affordable. | Show simple dashboard: bill before/after, monthly payment, net monthly benefit, payback, red flags and required next documents.
+Investor / ESCO | Wants to underwrite host-site project economics. | Show base/downside/upside case, bankable savings, data readiness, DSCR proxy, NPV/IRR and contract structure.
+Bank / lender | Wants conservative cash flow and evidence package. | Show investment-ready status, reconciliation error, bankable savings haircuts, debt-service capacity and audit trail.
+Technical advisor | Wants dispatch auditability. | Show LP objective, constraints, SOC, import cap, demand peaks and settlement intervals.
+[TABLE]
+File | Action
+app.py | Add BTM sub-navigation and route state using st.session_state["btm_submodule"].
+agents/btm_revenue_guard.py | New guard to disable non-BTM revenue streams when project_mode == BTM_CFE.
+agents/btm_investor_agent.py | Use only allowed BTM value streams in investor cases.
+agents/printout_agent.py | Create BTM-specific investor report template without merchant/PPA/capacity revenue sections.
+[TABLE]
+ID | Test
+F1-A | In BTM_CFE mode, PML merchant, PPA and CENACE capacity inputs are hidden or disabled.
+F1-B | If an API/CLI user passes merchant revenue streams to BTM_CFE, the guard removes them and returns a warning.
+F1-C | BTM investor report contains only CFE bill savings, PV self-consumption, optional backup value and financing metrics.
+F1-D | Front-of-meter module remains unchanged.
+[TABLE]
+Variable | Unit | Description
+grid_import_kw[t] | kW | Grid import after PV and BESS dispatch.
+pv_to_load_kw[t] | kW | PV directly consumed by load.
+charge_pv_kw[t] | kW | PV charging BESS.
+charge_grid_kw[t] | kW | Grid charging BESS, if enabled.
+discharge_kw[t] | kW | BESS discharge to serve load.
+soc_kwh[t] | kWh | BESS state of charge.
+pv_curtailed_kw[t] | kW | PV curtailed in no-export mode.
+grid_export_kw[t] | kW | Grid export; forced to zero in no-export mode.
+billing_capacity_kw[m] | kW | Billing demand for capacity charge.
+billing_distribution_kw[m] | kW | Billing demand for distribution charge.
+[TABLE]
+Approach | Use case | Implementation
+LP + post-bill calculation | Fast v1 | Optimize grid import and SOC; use cfe_bill_engine to calculate final charges.
+LP with target import cap sweep | More accurate peak shaving | Binary search import cap; LP checks feasibility and bill savings for each cap.
+MILP exact demand charge | Later bank-grade version | Binary variables or piecewise formulation for exact min() and no simultaneous charge/discharge.
+[TABLE]
+Metric | Rule-based | LP | Bankable
+Annual modeled savings | Yes | Yes | After haircuts
+Peak reduction | Yes | Yes | Yes
+PV curtailment | Yes | Yes | Yes
+Solver status | N/A | Required | Required
+Operational haircut | Optional | Required | Required
+Report use | Screening | Technical/investor | Lender/investor
+[TABLE]
+ID | Test
+F2-A | LP optimizer runs a full year of 15-minute data without SOC violations.
+F2-B | No-export mode produces zero grid export for every interval.
+F2-C | SOC never falls below reserve SOC or exceeds usable capacity.
+F2-D | LP savings are recomputed through the same CFE bill engine as baseline.
+F2-E | Reports clearly state dispatch engine used and solver status.
+F2-F | If solver fails, app falls back to rule-based screening and marks case as not bankable.
+[TABLE]
+Status | Meaning | Allowed outputs
+DEMO | Synthetic sample data or missing real customer data. | Charts and educational outputs only. No investor recommendation.
+SCREENING | Some real data available but not enough for investment decision. | Indicative savings and data request list. No GO recommendation.
+REVISE | Required data exists but failed quality/reconciliation thresholds. | Error diagnostics and correction workflow.
+INVESTMENT READY | Required data and reconciliation gates passed. | GO/REVISE/NO-GO allowed with evidence package.
+[TABLE]
+Gate | Pass condition | Failure status
+CFE bills | At least 12 monthly bills, PDF/XML or structured tariff bill file. | SCREENING
+15-minute load | At least 12 months; missing intervals <= 1%. | SCREENING or REVISE
+Tariff confirmed | Tariff, division, billing period and service class confirmed. | SCREENING
+Bill reconstruction | Absolute monthly total error <= 3% for most months and annual error <= 3%. | REVISE
+Demand validation | Dmaxmensual and Dmaxpunta can be computed from 15-min profile. | REVISE
+Power factor | Available or explicitly marked as excluded from bill reconstruction. | SCREENING
+PV profile | Required only for PV+BESS case. | SCREENING
+Synthetic data flag | False for investment-ready cases. | DEMO
+[TABLE]
+Screen | New element
+Uploads | Show completeness checklist: bills, load data, PV data, tariff, power factor, contracted demand.
+Baseline bill | Show CFE actual vs reconstructed, monthly error %, annual error %, failed months.
+Investor dashboard | Show colored case status badge: DEMO / SCREENING / REVISE / INVESTMENT READY.
+Reports | Disable investor report export if not INVESTMENT READY, or watermark as SCREENING ONLY.
+[TABLE]
+ID | Test
+F3-A | Synthetic sample data always returns DEMO and never returns GO.
+F3-B | Less than 12 months of bills or load returns SCREENING.
+F3-C | Bill reconstruction error above 3% returns REVISE.
+F3-D | Only INVESTMENT READY cases can produce GO/REVISE/NO-GO.
+F3-E | Every report and dashboard includes case status and data completeness.
+[TABLE]
+Report | Required changes
+Customer proposal PDF | Show monthly bill before/after, lease/payment, net monthly benefit and status. If not investment-ready, add SCREENING ONLY watermark.
+Investor evidence package | Include bill reconciliation, load data quality, dispatch engine, LP solver status, bankable savings haircuts and red flags.
+Technical dispatch appendix | Include 15-min SOC, grid import, PV, curtailment, demand peak timestamps and no-export compliance.
+QA report | Include missing intervals, duplicate timestamps, tariff calendar coverage and CFE invoice reconstruction error.
+[TABLE]
+Test file | Required tests
+tests/test_btm_revenue_guard.py | BTM_CFE disables merchant/PPA/capacity revenue streams.
+tests/test_btm_readiness_gate.py | DEMO, SCREENING, REVISE and INVESTMENT_READY statuses are triggered correctly.
+tests/test_btm_bill_reconciliation.py | Reconstruction error thresholds and monthly failures are handled correctly.
+tests/test_btm_lp_optimizer.py | LP feasibility, SOC limits, no-export, grid import and dispatch outputs.
+tests/test_btm_investor_outputs.py | GO/REVISE/NO-GO cannot run unless case is INVESTMENT_READY.
+tests/test_btm_report_watermark.py | Screening/demo reports are clearly labeled and not mistaken for bankable reports.
+[TABLE]
+Sprint | Scope | Deliverable
+Sprint 1 | Revenue guard and BTM sub-navigation. | BTM-only workflow and disabled merchant controls.
+Sprint 2 | Investment readiness gate and bill reconciliation dashboard. | Case status badge and report gating.
+Sprint 3 | BTM LP optimizer MVP with post-optimization CFE bill calculation. | LP engine selectable and default for Bankable Investor Case.
+Sprint 4 | Investor report updates and evidence package. | Customer proposal, investor package and QA report.
+Sprint 5 | Testing and hardening. | Full pytest coverage, demo/screening watermarks, fallback behavior.

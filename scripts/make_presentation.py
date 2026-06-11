@@ -114,7 +114,7 @@ def main() -> None:
         "peak-shaving / TOU dispatch → investor decision with GO / REVISE / NO-GO.",
         "",
         "Deliverables: interactive web app, Excel / Word / PDF / PowerPoint reports, "
-        "investor-grade summaries, full pytest-verified calculation engine (42 tests).",
+        "investor-grade summaries with CAPEX/OPEX/IRR, full pytest-verified engine (71 tests).",
         "Built to be integrated into Optimus AI after testing.",
     ], Inches(0.7), Inches(1.4), Inches(12.0), Inches(5.5), size=17)
 
@@ -124,10 +124,10 @@ def main() -> None:
     steps = [
         ("CENACE node catalog", "~3,000 NodosP enriched with zona, tipo, gerencia, estado"),
         ("Node Resolver", "pick nodes from dropdown or extract from PML reports"),
-        ("Market & PV data", "8,760 h PML prices + PV production profile"),
+        ("Market & PV data", "8,760 h PML + PV profile (upload or MW AC/MWp/yield specs)"),
         ("BESS dispatch", "price-rank heuristic or daily linear optimization"),
         ("PPA / Capacity", "contract structures + 100 critical hours credit"),
-        ("Reports", "Excel, Word, PDF, PowerPoint + investor report"),
+        ("Reports", "Excel, Word, PDF, PowerPoint + investor report + project IRR"),
     ]
     top = Inches(1.5)
     box_h, gap = Inches(0.78), Inches(0.17)
@@ -155,8 +155,9 @@ def main() -> None:
     _bullets(s, [
         "How it works — purpose, pipeline diagram, data inventory with live found/missing status.",
         "0. Node Resolver — searchable catalog dropdown with filters.",
-        "1. Dispatch + PPA + Capacity — wholesale revenue analysis.",
-        "2. Behind-the-Meter (CFE) — industrial bill-savings and investor case.",
+        "1. Front-of-Meter Dispatch + PPA + Capacity — wholesale revenue + CAPEX/OPEX/IRR.",
+        "2. Behind-the-Meter (CFE) — bill savings, readiness gate, savings IRR.",
+        "PV input: upload a profile OR enter MW AC, MWp, yield and degradation.",
         "Launch: double-click run_app.bat (creates venv and installs dependencies automatically).",
     ], Inches(0.7), Inches(1.3), Inches(5.3), Inches(5.0), size=15)
     _picture(s, "shot_01_home.png", Inches(6.2), Inches(1.3), width=Inches(6.7))
@@ -177,27 +178,29 @@ def main() -> None:
 
     # ------------------------------------------------- 6. dispatch
     s = _blank(prs)
-    _title_bar(s, "Module 1 — Dispatch, PPA & Capacity (wholesale)")
+    _title_bar(s, "Module 1 — Front-of-Meter Dispatch, PPA & Capacity")
     _bullets(s, [
-        "Merges 8,760 h of nodal PML prices with the PV production profile.",
+        "Merges 8,760 h of nodal PML prices with PV (upload or synthesized from specs).",
         "Battery dispatch engines:",
         "  price_rank — transparent daily heuristic (charge cheap, discharge expensive)",
         "  lp — daily linear program with SOC carry-over, efficiency and cycle limits",
         "Duration sweep 2-8 h finds the most profitable battery size.",
         "PPA structures: pro-rata, baseload block, solar-only — vs merchant.",
         "Capacity market: 100 critical hours → accredited MW → MXN/year.",
+        "Project economics: PV+BESS CAPEX, OPEX/insurance, financing → unlevered & levered IRR.",
     ], Inches(0.7), Inches(1.3), Inches(5.3), Inches(5.2), size=14)
     _picture(s, "shot_04_dispatch.png", Inches(6.2), Inches(1.3), width=Inches(6.7))
 
     # ------------------------------------------------- 7. revenue
     s = _blank(prs)
-    _title_bar(s, "Module 1 — Revenue results & reports")
+    _title_bar(s, "Module 1 — Revenue & project economics")
     _bullets(s, [
         "Interactive charts: average-day dispatch profile, single-day detail "
         "(flows + SOC + price), annual revenue by stream, monthly stacked revenue.",
-        "Sample-data result: MXN 238M total revenue (PPA 104M + Capacity 68M + Merchant 61M).",
-        "One click exports: Excel workbook, Word, PDF, PowerPoint — plus the "
-        "investor report PDF with executive summary and disclaimer.",
+        "Project economics panel: CAPEX (PV USD/kWp + BESS USD/kWh), OPEX, insurance, "
+        "financing, project life → NPV, payback, unlevered and levered project IRR.",
+        "Sample-data result: MXN 238M total revenue (PPA + Capacity + Merchant).",
+        "One click exports: Excel workbook, Word, PDF, PowerPoint — plus investor report PDF.",
     ], Inches(0.7), Inches(1.3), Inches(5.3), Inches(5.0), size=15)
     _picture(s, "shot_05_revenue.png", Inches(6.2), Inches(1.3), width=Inches(6.7))
 
@@ -205,12 +208,12 @@ def main() -> None:
     s = _blank(prs)
     _title_bar(s, "Module 2 — Behind-the-Meter (CFE) — how it flows")
     steps = [
-        ("15-minute load + PV data", "customer meter data; sample plant included"),
+        ("15-minute load + PV data", "upload or PV specs (MW AC / MWp / yield)"),
         ("CFE tariff calendar", "GDMTH base / intermedia / punta, seasons, holidays"),
-        ("Baseline bill reconstruction", "energy by period + capacity & distribution demand (CNE 2026 formulas)"),
-        ("BESS / PV+BESS dispatch", "no-export: peak shaving cap + TOU shifting + PV self-consumption"),
-        ("Optimized bill + savings", "savings attributed by tariff component"),
-        ("Investor layer", "financing, haircuts, NPV/IRR over BESS life → GO / REVISE / NO-GO"),
+        ("Baseline bill reconstruction", "energy by period + capacity & distribution demand"),
+        ("Dispatch engine", "rule-based screening OR LP bankable (import-cap sweep)"),
+        ("Optimized bill + savings", "savings by CFE tariff component; BTM-only revenues"),
+        ("Investor layer", "readiness gate DEMO→INVESTMENT READY; IRR on CFE savings"),
     ]
     top = Inches(1.5)
     for i, (head, sub) in enumerate(steps):
@@ -246,17 +249,17 @@ def main() -> None:
 
     # ------------------------------------------------- 10. investor layer
     s = _blank(prs)
-    _title_bar(s, "Module 2 — Investor decision layer")
+    _title_bar(s, "Module 2 — Investor layer & savings IRR")
     _bullets(s, [
         "Converts the technical model into an investment answer for an owner-manager.",
-        "Explicit costs: CAPEX (USD/kWh × FX), OPEX %/yr, insurance %/yr, financing "
-        "(cash / lease / loan) and a configurable BESS life (default 20 years).",
-        "Conservative haircuts: savings confidence 90%, availability 95%, collection 95%; "
-        "downside case stresses tariff spread and load.",
-        "Outputs: net monthly AND annual benefit (base/downside/upside), simple payback, "
-        "NPV over BESS life, unlevered project IRR, red flags.",
-        "Deterministic gate: GO / REVISE / NO-GO — reproducible from saved metrics.",
-        "Sample result: payback 1.3 y, NPV(20y) MXN 15.6M, IRR 74.6% → GO.",
+        "Explicit costs: CAPEX (PV USD/kWp + BESS USD/kWh × FX), OPEX %/yr, insurance %/yr, "
+        "financing (cash / lease / loan) and configurable BESS life (default 20 years).",
+        "IRR on CFE savings — unlevered (bill savings − OPEX vs CAPEX) and levered "
+        "(bankable savings after financing); NPV and payback over BESS life.",
+        "Investment readiness gate: DEMO | SCREENING | REVISE | INVESTMENT READY — "
+        "GO/REVISE/NO-GO blocked unless INVESTMENT READY (sample data = DEMO).",
+        "Conservative haircuts on bankable savings; red flags; Excel investor package.",
+        "Sub-workflows: Screening, Bankable Investor, Customer Proposal, Technical Dispatch.",
     ], Inches(0.7), Inches(1.3), Inches(5.3), Inches(5.4), size=14)
     _picture(s, "shot_08_btm_investor.png", Inches(6.2), Inches(1.3), width=Inches(6.7))
 
@@ -268,8 +271,10 @@ def main() -> None:
         "openpyxl / python-docx / reportlab / python-pptx for reports.",
         "Agent architecture: each capability is an isolated, testable module — "
         "ready to plug into Optimus AI.",
-        "Quality: 42 automated tests (tariff calendar, bill formulas, dispatch SOC "
-        "and no-export constraints, financing math, recommendation gates).",
+        "Quality: 71 automated tests (wholesale dispatch, BTM tariff/bill/dispatch, "
+        "BTM revenue guard, readiness gate, LP optimizer, PV synthesis, FOM economics).",
+        "New agents: pv_synthesis, fom_investor, btm_lp_optimizer, btm_revenue_guard, "
+        "btm_investment_readiness.",
         "Data: official CENACE node catalog (auto-download + enrich), CNE 2026 "
         "starter tariffs, synthetic sample profiles for instant demos.",
         "Next: CENACE PML live scraping hardening, CFE/CNE tariff scrapers, PDF bill "
